@@ -12,20 +12,8 @@
  *
  * @see template_preprocess_islandora_newspaper()
  */
-
-    $dc_object = DublinCore::importFromXMLString($object['DC']->content);
-    $dc_array = $dc_object->asArray();
-
-
 ?>
 <div class="islandora-newspaper-object islandora">
- <div class="newspaper-landing-wrapper">
-  <div class="newspaper-image-wrapper">
-   <div><img src="http://<?php echo $_SERVER['HTTP_HOST'] ?>/islandora/object/<?php echo $object->id ?>/datastream/MEDIUM/view"/></div>
-  </div>
-   <div class="newspaper-description-wrapper">
- 	<h1 class="title">About this collection</h1><p><?php print $dc_array['dc:description']['value']; ?></p></div>
-  </div>
   <div class="islandora-newspaper-content-wrapper clearfix">
     <?php if ($islandora_content): ?>
       <div class="islandora-newspaper-content">
