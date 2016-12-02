@@ -18,14 +18,35 @@
 
 
 ?>
+<div id="get-host" style="display:none;">
+<?php echo $_SERVER['HTTP_HOST']; ?>
+</div>
+<div id="get-pid" style="display:none;">
+<?php echo $object->id ?>
+</div>	
+<script type="text/javascript">
+var getpid = document.getElementById("get-pid");
+var pid = getpid.textContent;
+function newspaperSearch(){
+	var query = document.getElementById("np-query").value;
+	var newspaperQuery = "/islandora/search/" + query + "?type=dismax&f[0]=RELS_EXT_isMemberOf_uri_ms:\"info:fedora/" + pid +"\"";
+	window.location.assign(newspaperQuery)
+}
+
+</script>
 <div class="islandora-newspaper-object islandora">
  <div class="newspaper-landing-wrapper">
   <div class="newspaper-image-wrapper">
    <div><img src="http://<?php echo $_SERVER['HTTP_HOST'] ?>/islandora/object/<?php echo $object->id ?>/datastream/MEDIUM/view"/></div>
   </div>
    <div class="newspaper-description-wrapper">
- 	<h1 class="title">About this collection</h1><p><?php print $dc_array['dc:description']['value']; ?></p></div>
+ 	<h1 class="title">About this collection</h1><p><?php print $dc_array['dc:description']['value']; ?></p>
+	<div class="newspaper-search-wrapper"><h3>Search within this collection:</h3><div class="newspaper-search-box">
+	<form action="#" onSubmit="newspaperSearch(this);return false;"><input class="form-text" type="text" name="np-query" id="np-query" value="" />
+	<input type="button" class="form-submit btn-default" value="Search" onSubmit="return newspaperSearch();" onClick="return newspaperSearch();"  /></form></div>
   </div>
+ </div>  
+</div>
   <div class="islandora-newspaper-content-wrapper clearfix">
     <?php if ($islandora_content): ?>
       <div class="islandora-newspaper-content">
