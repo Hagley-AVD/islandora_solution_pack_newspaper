@@ -95,7 +95,8 @@ class IslandoraNewspaperPageIngestTestCase extends IslandoraCollectionWebTestCas
       'titleInfo[title]' => $issue_title,
       'originInfo[dateIssued]' => '2002-02-20',
     );
-    $this->drupalPost($path, $edit, 'Ingest');
+
+    $this->drupalPost($path, $edit, t('Ingest'));
     $this->assertText($issue_title, 'Issue was created', 'Islandora');
 
     // Checks for issue datastream creation.
@@ -134,17 +135,14 @@ class IslandoraNewspaperPageIngestTestCase extends IslandoraCollectionWebTestCas
     // Attempts to validate datastreams where possible.
     $datastreams = array(
       array('OBJ', 'tiff'),
-      array('OCR', 'text', array('TEST TIFF', 14)),
-      array('HOCR', 'text', array('TEST', 14)),
-      array('HOCR', 'text', array('TIFF', 14)),
+      array('OCR', 'text', array('HAPPY DOG', 3)),
+      array('HOCR', 'text', array('HAPPY', 6)),
+      array('HOCR', 'text', array('CAT', 3)),
       array('JP2', 'jp2'),
       array('PDF', 'pdf'),
       array('TN', 'image'),
       array('JPG', 'image'),
     );
     $this->validateDatastreams($page_pid, $datastreams);
-
-    $this->deleteObject($newspaper_pid, 'Delete Newspaper');
-    $this->deleteTestCollection($collection_pid);
   }
 }

@@ -65,9 +65,6 @@ function islandora_newspaper_get_newspaper($object) {
 /**
  * Gets all the issues that the given newspaper owns.
  *
- * The results are ordered by their RELS-EXT dateIssued property.
- * Older to newer.
- *
  * @param AbstractObject $object
  *   An AbstractObject representing a Fedora object.
  *
@@ -77,9 +74,44 @@ function islandora_newspaper_get_newspaper($object) {
  *     - pid: The unique persistent identifier for the issue.
  *     - label: A descriptive label for the issue.
  *     - sequence: The sequence number of the issue, starts at 1.
- *     - issued: A DateTime object repersenting the date the issue was released.
+ *     - issued: A DateTime object representing the date the issue was released.
  */
 function islandora_newspaper_get_issues(AbstractObject $object) {
+
+  if (module_exists('islandora_solr') && variable_get('islandora_newspaper_use_solr', FALSE)) {
+    $issues = islandora_newspaper_get_issues_solr($object);
+  }
+  else {
+    $issues = islandora_newspaper_get_issues_sparql($object);
+  }
+
+  // Grab the PIDs...
+  $get_pid = function ($o) {
+    return $o['pid'];
+  };
+  $pids = array_map($get_pid, $issues);
+  // Make the PIDs the keys.
+  $issues = count($pids) ? array_combine($pids, $issues) : array();
+  return $issues;
+}
+
+/**
+ * Gets all the issues that the given newspaper owns use the resource index.
+ *
+ * The results are ordered by their RELS-EXT dateIssued property.
+ * Older to newer.
+ *
+ * @param AbstractObject $object
+ *   An AbstractObject representing a Fedora object.
+ *
+ * @return array
+ *   An array with element of the form of:
+ *     - pid: The unique persistent identifier for the issue.
+ *     - label: A descriptive label for the issue.
+ *     - sequence: The sequence number of the issue, starts at 1.
+ *     - issued: A DateTime object representing the date the issue was released.
+ */
+function islandora_newspaper_get_issues_sparql(AbstractObject $object) {
   $query = <<<EOQ
 PREFIX islandora-rels-ext: <http://islandora.ca/ontology/relsext#>
 PREFIX fedora-rels-ext: <info:fedora/fedora-system:def/relations-external#>
@@ -115,14 +147,14 @@ EOQ;
 
   $results = $object->repository->ri->sparqlQuery($query);
   // Map the results using a default Datetime for missing issued dates.
-  $map_results = function($o) {
+  $map_results = function ($o) {
     try {
       @$issued = new DateTime($o['issued']['value']);
     }
     catch (Exception $e) {
       // Use the current time as a place holder.
       $issued = new DateTime();
-      $msg  = 'Failed to get issued date from SPARQL query for @pid';
+      $msg = 'Failed to get issued date from SPARQL query for @pid';
       $vars = array('@pid' => $o['object']['value']);
       watchdog_exception('islandora_newspaper', $e, $msg, $vars, WATCHDOG_ERROR);
     }
@@ -134,13 +166,116 @@ EOQ;
     );
   };
   $issues = array_map($map_results, $results);
-  // Grab the PIDs...
-  $get_pid = function($o) {
-    return $o['pid'];
+  return $issues;
+}
+
+/**
+ * Gets all the issues that the given newspaper owns using Solr.
+ *
+ * @param AbstractObject $object
+ *   An AbstractObject representing a Fedora object.
+ *
+ * @return array
+ *   An array with elements of the form of:
+ *     - pid: The unique persistent identifier for the issue.
+ *     - label: A descriptive label for the issue.
+ *     - sequence: The sequence number of the issue, starts at 1.
+ *     - issued: A DateTime object representing the date the issue was released.
+ */
+function islandora_newspaper_get_issues_solr(AbstractObject $object) {
+  $parent_field = variable_get('islandora_newspaper_parent_issue_solr_field', 'RELS_EXT_isMemberOf_uri_ms');
+  $date_field = variable_get('islandora_newspaper_solr_date_field', 'RELS_EXT_dateIssued_literal_ms');
+  $sequence_field = variable_get('islandora_newspaper_solr_sequence_field', 'RELS_EXT_isSequenceNumber_literal_ms');
+  // Counter for looping the start.
+  $start = -1;
+  // Number of records to return at once.
+  $rows = 10000;
+  $count = 0;
+  $results = array();
+
+  $solr_build = new IslandoraSolrQueryProcessor();
+  $solr_query = format_string('!parent_field:("info:fedora/!pid" OR "!pid") AND'
+    . ' RELS_EXT_hasModel_uri_ms:"info:fedora/islandora:newspaperIssueCModel"',
+    array(
+      '!parent_field' => $parent_field,
+      '!pid' => $object->id,
+    )
+  );
+
+  do {
+    $start += 1;
+    $solr_param = array(
+      'rows' => $rows,
+      'limit' => $rows,
+      'fl' => format_string('!date, !sequence, PID, fgs_label_s', array(
+        '!date' => $date_field,
+        '!sequence' => $sequence_field,
+      )),
+      'start' => ($rows * $start),
+      'hl' => 'false',
+      'facet' => 'false',
+    );
+
+    $solr_build->buildQuery($solr_query, $solr_param);
+    $solr_build->solrParams = array_replace_recursive($solr_build->solrParams, $solr_param);
+    if (variable_get('islandora_newspaper_solr_remove_base_filters', 1)) {
+      module_load_include('inc', 'islandora_solr', 'includes/utilities');
+      $solr_build->solrParams = islandora_solr_remove_base_filters($solr_build->solrParams);
+    }
+    try {
+      $solr_build->executeQuery(FALSE);
+      $count = $solr_build->islandoraSolrResult['response']['numFound'];
+      $results = array_merge($results, $solr_build->islandoraSolrResult['response']['objects']);
+    }
+    catch (Exception $error) {
+      drupal_set_message(check_plain(t('Error searching Solr index')) . ' ' . $error->getMessage(), 'error');
+    }
+
+  } while ($count > ($rows * $start + $rows) && !isset($error));
+
+  // Check the Solr doc array top and inside 'solr_doc'.
+  $check_fn = function ($o, $name) {
+    $value = "";
+    if (isset($o[$name])) {
+      $value = $o[$name];
+    }
+    elseif (isset($o['solr_doc'][$name])) {
+      $value = $o['solr_doc'][$name];
+    }
+    if (is_array($value)) {
+      return reset($value);
+    }
+    else {
+      return $value;
+    }
   };
-  $pids = array_map($get_pid, $issues);
-  // Make the PIDs the keys.
-  return count($pids) ? array_combine($pids, $issues) : array();
+
+  // Map the results using a default Datetime for missing issued dates.
+  $map_results = function ($o) use ($date_field, $check_fn, $sequence_field) {
+    try {
+      @$issued = new DateTime($check_fn($o, $date_field));
+    }
+    catch (Exception $e) {
+      // Use the current time as a place holder.
+      $issued = new DateTime();
+      $msg = 'Failed to get issued date from Solr query for @pid';
+      $vars = array('@pid' => $o['PID']);
+      watchdog_exception('islandora_newspaper', $e, $msg, $vars, WATCHDOG_ERROR);
+    }
+    $sequence = $check_fn($o, $sequence_field);
+    if (empty($sequence)) {
+      $sequence = 0;
+    }
+    return array(
+      'pid' => $o['PID'],
+      'label' => $o['object_label'],
+      'sequence' => $sequence,
+      'issued' => $issued,
+    );
+  };
+  $issues = array_map($map_results, $results);
+
+  return $issues;
 }
 
 /**
@@ -177,29 +312,27 @@ function islandora_newspaper_group_issues(array $issues) {
  */
 function islandora_newspaper_get_date_issued_from_mods(AbstractDatastream $datastream) {
   $out = FALSE;
-  $file = file_create_filename("{$datastream->parent->id}_{$datastream->id}.xml", 'temporary://');
-  $datastream->getContent($file);
-  @$doc = simplexml_load_file($file);
-  if ($doc) {
-    $doc->registerXPathNamespace('ns', 'http://www.loc.gov/mods/v3');
+  $dom = new DOMDocument();
+  if ($dom->loadXML($datastream->content)) {
+    $xpath = new DomXPath($dom);
+    $xpath->registerNamespace('ns', 'http://www.loc.gov/mods/v3');
     // Assumes the canonical date issued exists in the first mods document under
     // origin info and is not specified as a point, additional logic could be
     // added to process different encodings.
-    $dates = $doc->xpath('//ns:mods[1]/ns:originInfo/ns:dateIssued[not(@point)][1]');
-    $result = (string) reset($dates);
+    $dates = $xpath->query('//ns:mods/ns:originInfo/ns:dateIssued[not(@point)]')->item(0);
     try {
-      if (empty($result)) {
+      if (empty($dates)) {
         throw new Exception('mods:dateIssued element was empty.');
       }
+      $result = $dates->nodeValue;
       $out = new DateTime($result);
     }
     catch (Exception $e) {
-      $msg  = 'Failed to get issued date from MODS for @pid';
+      $msg = 'Failed to get issued date from MODS for @pid';
       $vars = array('@pid' => $datastream->parent->id);
       watchdog_exception('islandora_newspaper', $e, $msg, $vars, WATCHDOG_ERROR);
     }
   }
-  file_unmanaged_delete($file);
   return $out;
 }
 
@@ -236,7 +369,7 @@ function islandora_newspaper_get_date_issued(AbstractObject $object) {
 /**
  * Fetch the issues of a newspaper that do not have a date.
  *
- * @param AbstractObject|NULL $object
+ * @param AbstractObject|null $object
  *   Newspaper object or empty for all issues.
  *
  * @return array
@@ -290,7 +423,7 @@ EOQ;
     '!filters' => implode(' ', array_map($filter_map, $query_filters)),
   ));
   $results = $tuque->repository->ri->sparqlQuery($query);
-  $map_results = function($o) {
+  $map_results = function ($o) {
     return array(
       'pid' => $o['object']['value'],
       'label' => $o['label']['value'],
@@ -310,52 +443,34 @@ EOQ;
  */
 function islandora_newspaper_set_mods_date_issued(AbstractDatastream $datastream, DateTime $date) {
   $out = FALSE;
-  $file = file_create_filename("{$datastream->parent->id}_{$datastream->id}.xml", 'temporary://');
-  $datastream->getContent($file);
-  @$doc = simplexml_load_file($file);
-  if ($doc) {
-    $doc->registerXPathNamespace('ns', 'http://www.loc.gov/mods/v3');
+  $dom = new DOMDocument();
+  if ($dom->loadXML($datastream->content)) {
+    $xpath = new DomXPath($dom);
+    $xpath->registerNamespace('ns', 'http://www.loc.gov/mods/v3');
     // Assumes the canonical date issued exists in the first mods document under
     // origin info and is not specified as a point, additional logic could be
     // added to process different encodings.
-    $parent = FALSE;
-    $dates = $doc->xpath('//ns:mods[1]/ns:originInfo/ns:dateIssued[not(@point)][1]');
-    if (is_array($dates) && count($dates) > 0) {
-      $removal = array();
-      // XX: Because you can't remove elements in a foreach loop
-      // we collect them. Then we can add the new one and remove
-      // the old.
-      foreach ($dates as $d) {
-        $removal[] = $d;
-      }
-      foreach ($removal as $r) {
-        $dom = dom_import_simplexml($r);
-        $dom->parentNode->removeChild($dom);
-      }
+    $dates = $xpath->query('//ns:mods/ns:originInfo/ns:dateIssued[not(@point)]');
+    foreach ($dates as $d) {
+      $d->parentNode->removeChild($d);
     }
-    $origin = $doc->xpath('//ns:mods[1]/ns:originInfo');
-    if ($origin) {
-      $parent = reset($origin);
+    $new_date = $dom->createElementNS($dom->firstChild->namespaceURI, 'dateIssued', $date->format("Y-m-d"));
+    $new_date->setAttribute('encoding', 'iso8601');
+    $origin = $xpath->query('//ns:mods/ns:originInfo')->item(0);
+    if (!$origin) {
+      $origin = $dom->createElementNS($dom->firstChild->namespaceURI, 'originInfo');
+      $origin = $dom->firstChild->appendChild($origin);
     }
-    if ($parent) {
-      $new_date = $parent->addChild('dateIssued', $date->format("Y-m-d"), 'http://www.loc.gov/mods/v3');
-      $new_date->addAttribute('encoding', 'iso8601');
-      try {
-        $datastream->setContentFromString($doc->asXML());
-        $out = TRUE;
-      }
-      catch (Exception $e) {
-        $msg  = 'Failed to get save MODS datastream for @pid';
-        $vars = array('@pid' => $datastream->parent->id);
-        watchdog_exception('islandora_newspaper', $e, $msg, $vars, WATCHDOG_ERROR);
-      }
+    $new_date = $origin->appendChild($new_date);
+    try {
+      $datastream->setContentFromString($dom->saveXML());
+      $out = TRUE;
     }
-    else {
-      $msg  = 'Failed to get originInfo from MODS for @pid';
+    catch (Exception $e) {
+      $msg = 'Failed to get save MODS datastream for @pid';
       $vars = array('@pid' => $datastream->parent->id);
       watchdog_exception('islandora_newspaper', $e, $msg, $vars, WATCHDOG_ERROR);
     }
   }
-  file_unmanaged_delete($file);
   return $out;
 }
