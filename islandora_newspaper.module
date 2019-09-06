@@ -268,6 +268,7 @@ function islandora_newspaper_xml_form_builder_form_associations() {
       'dsid' => 'MODS',
       'title_field' => array('titleInfo', 'title'),
       'transform' => 'mods_to_dc.xsl',
+      'self_transform' => 'islandora_cleanup_mods_extended.xsl',
       'template' => FALSE,
     ),
     'islandora_newspaper_issue_mods_form' => array(
@@ -276,6 +277,7 @@ function islandora_newspaper_xml_form_builder_form_associations() {
       'dsid' => 'MODS',
       'title_field' => array('titleInfo', 'title'),
       'transform' => 'mods_to_dc.xsl',
+      'self_transform' => 'islandora_cleanup_mods_extended.xsl',
       'template' => FALSE,
     ),
   );
@@ -331,7 +333,7 @@ function islandora_newspaper_islandora_newspaperpagecmodel_islandora_ingest_step
 /**
  * Implements hook_CMODEL_PID_islandora_ingest_steps().
  */
-function islandora_newspaper_islandora_newspaperIssueCModel_islandora_ingest_steps(array $form_state) {
+function islandora_newspaper_islandora_newspaperissuecmodel_islandora_ingest_steps(array $form_state) {
   module_load_include('inc', 'islandora_paged_content', 'includes/utilities');
   if (islandora_paged_content_can_extract_from_pdf()) {
     return array(
@@ -421,6 +423,26 @@ function islandora_newspaper_islandora_newspaperpagecmodel_islandora_solr_object
 }
 
 /**
+ * Implements hook_CMODEL_PID_islandora_solr_object_result_alter().
+ *
+ * Puts the Solr query terms into the object URL so that viewers can use them
+ * for highlighting.
+ */
+function islandora_newspaper_islandora_newspaperissuecmodel_islandora_solr_object_result_alter(&$search_results, $query_processor) {
+  module_load_include('inc', 'islandora', 'includes/solution_packs');
+  if (islandora_get_viewer_id('islandora_newspaper_issue_viewers') == 'islandora_internet_archive_bookreader' &&
+    ($query_processor->solrDefType == 'dismax' || $query_processor->solrDefType == 'edismax')) {
+    $view_types = array(
+      "1" => "1up",
+      "2" => "2up",
+      "3" => "thumb",
+    );
+    $ia_view = variable_get('islandora_internet_archive_bookreader_default_page_view', "1");
+    $search_results['object_url_fragment'] = "page/1/mode/{$view_types[$ia_view]}/search/" . rawurlencode($query_processor->solrQuery);
+  }
+}
+
+/**
  * Implements hook_process_theme().
  */
 function islandora_newspaper_preprocess_islandora_object_print(array &$variables) {
@@ -459,7 +481,8 @@ function islandora_newspaper_process_islandora_object_print(array &$variables) {
       'download_clip' => array(
         '#prefix' => '<strong>',
         '#markup' => l(t('Download Image'), "islandora/object/{$object->id}/download_clip", array(
-                     'query' => array('clip' => $clip))),
+          'query' => array('clip' => $clip),
+        )),
         '#suffix' => '</strong>',
         '#weight' => -5,
       ),
@@ -528,7 +551,7 @@ function islandora_newspaper_islandora_delete_issue_form_delete_pages_submit(arr
   module_load_include('inc', 'islandora', 'includes/utilities');
 
   $object = $form_state['object'];
-  $get_pid = function($o) {
+  $get_pid = function ($o) {
     return $o['pid'];
   };
   $pages = array_values(array_map($get_pid, islandora_paged_content_get_pages($object)));
@@ -598,7 +621,7 @@ function islandora_newspaper_issue_page_access(AbstractObject $object) {
 /**
  * Implements hook_islandora_xacml_editor_child_query().
  */
-function islandora_newspaper_islandora_newspaperIssueCModel_islandora_xacml_editor_child_query(AbstractObject $object) {
+function islandora_newspaper_islandora_newspaperissuecmodel_islandora_xacml_editor_child_query(AbstractObject $object) {
   $pages_query = <<<EOQ
 SELECT ?object from <#ri> WHERE
 {
@@ -618,7 +641,7 @@ EOQ;
 /**
  * Implements hook_islandora_xacml_editor_child_query().
  */
-function islandora_newspaper_islandora_newspaperCModel_islandora_xacml_editor_child_query(AbstractObject $object) {
+function islandora_newspaper_islandora_newspapercmodel_islandora_xacml_editor_child_query(AbstractObject $object) {
   $issues_query = <<<EOQ
 SELECT ?object from <#ri> WHERE
 {
@@ -642,11 +665,11 @@ function islandora_newspaper_islandora_view_print_object($object) {
   if (in_array('islandora:newspaperPageCModel', $object->models)) {
     // Theme image separately.
     $islandora_content = theme('image', array(
-        'title' => $object->label,
-        'path' => url("islandora/object/{$object->id}/datastream/JPG/view"),
+      'title' => $object->label,
+      'path' => url("islandora/object/{$object->id}/datastream/JPG/view"),
     ));
     return theme('islandora_newspaper_page_img_print', array(
-        'islandora_content' => $islandora_content,
+      'islandora_content' => $islandora_content,
     ));
   }
 }
